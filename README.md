@@ -31,6 +31,60 @@ cp .env.example .env
 python scripts/run_pipeline.py
 ```
 # Architecture
+```mermaid
+flowchart TB
+    subgraph INPUT["Input Sources"]
+        A1[("📁 File<br/>CSV/JSON/Parquet")]
+        A2[("⚡ Event<br/>S3 + Glue Trigger")]
+        A3[("🗄️ Database<br/>JDBC (PostgreSQL/MySQL)")]
+    end
+
+    subgraph AGENTS["Agentic Layer (Groq LLM)"]
+        B1["🤖 Code Generator<br/>• Converts config → PySpark<br/>• Uses llama-3.3-70b<br/>• 280 tokens/sec"]
+        B2["🔍 Validator<br/>• AST syntax check<br/>• Spark best practices<br/>• Auto-fix capabilities"]
+        B3["⚙️ Executor<br/>• Orchestrates layers<br/>• Metrics collection<br/>• Retry logic"]
+    end
+
+    subgraph LAYERS["Medallion Architecture"]
+        direction LR
+        C1["🥉 Bronze Layer<br/>Raw ingestion<br/>+ metadata columns<br/>Write: append/overwrite"]
+        C2["🥈 Silver Layer<br/>Cleaning & validation<br/>• Null handling<br/>• Deduplication<br/>• Type casting"]
+        C3["🥇 Gold Layer<br/>Aggregations<br/>• Business metrics<br/>• Window functions<br/>• Sorting"]
+    end
+
+    subgraph OUTPUT["Output Targets"]
+        D1[("📊 Parquet<br/>Columnar storage<br/>5-10x compression")]
+        D2[("☁️ AWS Glue<br/>Production deployment<br/>Job queuing enabled")]
+    end
+
+    subgraph OFFLINE["Offline Development"]
+        E1["🐍 Local Spark<br/>master('local[*]')"]
+        E2["🐳 Docker<br/>Glue container"]
+        E3["👀 Watchdog<br/>File event simulation"]
+    end
+
+    A1 --> B1
+    A2 --> B1
+    A3 --> B1
+    B1 --> B2
+    B2 --> B3
+    B3 --> C1
+    C1 --> C2
+    C2 --> C3
+    C3 --> D1
+    D1 --> D2
+    
+    B3 -.-> E1
+    B3 -.-> E2
+    B3 -.-> E3
+
+    style AGENTS fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    style LAYERS fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    style C1 fill:#fff3e0,stroke:#e65100
+    style C2 fill:#e0f2f1,stroke:#004d40
+    style C3 fill:#fff8e1,stroke:#f57f17
+    style OUTPUT fill:#c8e6c9,stroke:#2e7d32
+```
 
 Config (USE_CASE_CONFIG)\
 then\
