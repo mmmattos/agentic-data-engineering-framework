@@ -1,0 +1,101 @@
+# ============================================================
+# FINTECH / FINANCIAL SYSTEM DOMAIN
+# ============================================================
+
+USE_CASE_CONFIG_FINTECH = {
+    "business_domain": "Financial Transactions",
+    "bronze_table_name": "transactions_raw",
+    "silver_table_name": "transactions_clean",
+    "gold_table_name": "financial_aggregated",
+    "gold_output_format": "parquet",
+    
+    "source_format": "parquet",
+    "source_path": "data/raw/transactions/",
+    "source_options": {},
+    
+    "schema_info": """
+        transaction_id: string
+        account_id: string
+        transaction_date: timestamp
+        amount: decimal(15,2)
+        transaction_type: string (DEPOSIT, WITHDRAWAL, TRANSFER, PAYMENT)
+        status: string (PENDING, COMPLETED, FAILED, REVERSED)
+        merchant_category: string
+        fraud_flag: boolean
+    """,
+    
+    "available_columns": [
+        "transaction_id", "account_id", "transaction_date", "amount", 
+        "transaction_type", "status", "merchant_category", "fraud_flag"
+    ],
+    
+    "cleaning_rules": {
+        "null_drop_columns": ["transaction_id", "account_id", "transaction_date", "amount"],
+        "null_fill_columns": {"status": "'PENDING'"},
+        "deduplication_columns": ["transaction_id"],
+        "validation_rules": [
+            {"column": "amount", "rule": "col('amount') > 0", "description": "Amount must be positive"},
+            {"column": "transaction_type", "rule": "col('transaction_type').isin(['DEPOSIT', 'WITHDRAWAL', 'TRANSFER', 'PAYMENT'])", "description": "Valid transaction type"},
+            {"column": "status", "rule": "col('status').isin(['PENDING', 'COMPLETED', 'FAILED', 'REVERSED'])", "description": "Valid status"},
+            {"column": "fraud_flag", "rule": "col('fraud_flag").isin([True, False])", "description": "Fraud flag must be boolean"}
+        ],
+        "data_type_fixes": {
+            "transaction_date": "to_timestamp(col('transaction_date'))",
+            "amount": "col('amount').cast('decimal(15,2)')"
+        }
+    },
+    
+    "aggregations": {
+        "total_revenue": {
+            "type": "agg",
+            "expression": "sum(when(col('status') == 'COMPLETED', col('amount')).otherwise(0))",
+            "alias": "total_revenue"
+        },
+        "avg_transaction_value": {
+            "type": "agg",
+            "expression": "avg(when(col('status') == 'COMPLETED', col('amount')).otherwise(0))",
+            "alias": "avg_transaction_value"
+        },
+        "fraud_count": {
+            "type": "agg",
+            "expression": "sum(when(col('fraud_flag') == True, 1).otherwise(0))",
+            "alias": "fraud_count"
+        },
+        "revenue_by_account": {
+            "type": "group_by",
+            "group_by": ["account_id"],
+            "aggregations": [{"column": "amount", "function": "sum", "alias": "total_spent"}],
+            "sort": ["total_spent DESC"]
+        },
+        "revenue_by_merchant": {
+            "type": "group_by",
+            "group_by": ["merchant_category"],
+            "aggregations": [{"column": "amount", "function": "sum", "alias": "category_revenue"}],
+            "sort": ["category_revenue DESC"]
+        },
+        "daily_transaction_volume": {
+            "type": "group_by",
+            "group_by": ["transaction_date"],
+            "date_column": "transaction_date",
+            "aggregations": [
+                {"column": "amount", "function": "sum", "alias": "daily_volume"},
+                {"column": "transaction_id", "function": "count", "alias": "transaction_count"}
+            ],
+            "sort": ["date ASC"]
+        },
+        "completion_rate": {
+            "type": "agg",
+            "expression": "sum(when(col('status') == 'COMPLETED', 1).otherwise(0)) / count(*)",
+            "alias": "completion_rate"
+        }
+    },
+    
+    "default_quality_requirements": """
+        - No null transaction_id, account_id, or amount
+        - Amount must be positive for all transactions
+        - Valid transaction types only (DEPOSIT, WITHDRAWAL, TRANSFER, PAYMENT)
+        - Valid status values only
+        - No duplicate transaction_ids
+        - Transaction date cannot be future
+    """,
+}

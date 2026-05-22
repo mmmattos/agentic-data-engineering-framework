@@ -1,0 +1,89 @@
+# ============================================================
+# IOT SENSORS DOMAIN
+# ============================================================
+
+USE_CASE_CONFIG_IOT = {
+    "business_domain": "IoT Sensors",
+    "bronze_table_name": "sensor_raw",
+    "silver_table_name": "sensor_clean", 
+    "gold_table_name": "sensor_aggregated",
+    "gold_output_format": "parquet",
+    
+    "source_format": "json",
+    "source_path": "data/raw/sensors/",
+    "source_options": {
+        "multiLine": "true"
+    },
+    
+    "schema_info": """
+        device_id: string
+        timestamp: timestamp
+        temperature: float
+        humidity: float
+        pressure: float
+        battery_level: int
+    """,
+    
+    "available_columns": [
+        "device_id", "timestamp", "temperature", "humidity", "pressure", "battery_level"
+    ],
+    
+    "cleaning_rules": {
+        "null_drop_columns": ["device_id", "timestamp"],
+        "null_fill_columns": {"temperature": "0", "humidity": "0", "pressure": "0"},
+        "deduplication_columns": ["device_id", "timestamp"],
+        "validation_rules": [
+            {"column": "temperature", "rule": "(col('temperature') >= -50) & (col('temperature') <= 100)", "description": "Valid temperature range"},
+            {"column": "humidity", "rule": "(col('humidity') >= 0) & (col('humidity') <= 100)", "description": "Valid humidity range"},
+            {"column": "battery_level", "rule": "(col('battery_level') >= 0) & (col('battery_level') <= 100)", "description": "Valid battery level"}
+        ],
+        "data_type_fixes": {
+            "timestamp": "to_timestamp(col('timestamp'))",
+            "temperature": "col('temperature').cast('double')",
+            "humidity": "col('humidity').cast('double')"
+        }
+    },
+    
+    "aggregations": {
+        "avg_temperature": {
+            "type": "agg",
+            "expression": "avg('temperature')",
+            "alias": "avg_temperature"
+        },
+        "avg_humidity": {
+            "type": "agg", 
+            "expression": "avg('humidity')",
+            "alias": "avg_humidity"
+        },
+        "temp_by_device": {
+            "type": "group_by",
+            "group_by": ["device_id"],
+            "aggregations": [{"column": "temperature", "function": "avg", "alias": "avg_temp"}],
+            "sort": ["avg_temp DESC"]
+        },
+        "hourly_avg_temp": {
+            "type": "group_by",
+            "group_by": ["timestamp"],
+            "date_column": "timestamp",
+            "aggregations": [{"column": "temperature", "function": "avg", "alias": "hourly_avg_temp"}],
+            "sort": ["date ASC"]
+        },
+        "low_battery_devices": {
+            "type": "group_by",
+            "group_by": ["device_id"],
+            "aggregations": [{"column": "battery_level", "function": "min", "alias": "min_battery"}],
+            "sort": ["min_battery ASC"]
+        }
+    },
+    
+    "default_quality_requirements": """
+        - No null device_id or timestamp
+        - Temperature between -50°C and 100°C
+        - Humidity between 0% and 100%
+        - Battery level between 0% and 100%
+        - Remove duplicate readings from same device at same time
+    """,
+}
+
+
+

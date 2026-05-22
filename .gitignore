@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+*.egg
+.pytest_cache/
+scaffold_project.sh
+
+# Jupyter
+.ipynb_checkpoints/
+# *.ipynb
+*.ipynb~
+*.nbconvert.ipynb
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Data (except structure)
+data/raw/*.csv
+data/raw/*.json
+data/raw/*.parquet
+data/bronze/*
+data/silver/*
+data/gold/*
+!data/*/.gitkeep
+notebooks/data/*
+
+# Output
+output/
+generated_code/
+notebooks/output/
+notebooks/generated_code/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs and reports
+logs/
+*.log
+*.html
+*.json
+!requirements.json
+
+# OS
+Thumbs.db
+.DS_Store
+*.bak
+
+# AWS/Glue
+*.zip
+deploy/
+
+# Testing
+.coverage
+htmlcov/
+.tox/
