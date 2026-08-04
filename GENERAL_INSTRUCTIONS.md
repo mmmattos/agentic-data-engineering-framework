@@ -1,223 +1,265 @@
-# General Instructions
+---
+GENERAL_INSTRUCTIONS.md
+---
+
+# General Instructions - GCP Extension
 
 ## Project Overview
 
-This is a config-driven ETL pipeline that uses an LLM (Groq) to generate PySpark code for medallion architecture data processing.
+This is a config-driven ETL pipeline that uses an LLM (Groq) to generate PySpark code for medallion architecture data processing. It supports local development, AWS Glue, and Google Cloud Dataproc.
 
-## Prerequisites
+## Multi-Cloud Configuration
 
-### System Requirements
-- Python 3.10 or higher
-- Java 8 or 11 (for Spark)
-- 8GB RAM minimum (16GB recommended for Spark)
+The framework uses a single `USE_CASE_CONFIG` to switch between cloud providers:
 
-### Python Packages
-
-pip install -r requirements.txt
-
-Key packages:
-- \`groq\`, \`langchain-groq\` - LLM integration
-- \`pyspark\` - Data processing
-- \`watchdog\` - File monitoring (event simulation)
-- \`jupyter\` - Development notebooks
-
-## Getting Started
-
-
-## 1. Setup Virtual Environment
-
-python -m venv .venv
-### Linux/Mac
-source .venv/bin/activate
-### Windows
-.venv\\Scripts\\activate
-
-Then:
-
-pip install -r requirements.txt
-
-### 2. Configure Environment
-
-cp .env.example .env
- - Edit .env with your GROQ_API_KEY
-
-### 3. Configure Pipeline
-
- - Edit \`agents/code_generator_agent.py\`
- - modify \`USE_CASE_CONFIG\` for your domain.
- - Edit other variables. USE_CASE_CONFIG.md for details.
-
-### 4. Run Jupyter (Development)
-
-$ jupyter notebook notebooks/
-
-Run notebook \`01_complete_pipeline.ipynb\` from top to bottom.
-
-### 5. Run Pipeline (Production)
-
-python scripts/run_pipeline.py
-
-## Development Workflow
-
-### 1. Modify Configuration
-- Update \`USE_CASE_CONFIG\` in \`code_generator_agent.py\`
-- Test with small dataset in Jupyter
-
-### 2. Generate Code
-- Code is auto-generated from config
-- Layers generation in individual notebook cells (Bronze, Silver and Gold).
-- Saved to \`output/generated_code/\` for audit
-
-### 3. Validate
-- Code syntax validation
-- Best practices checking
-- Layer-specific validations
-
-### 4. Execute
-- Bronze → Silver → Gold sequentially
-- Stops on first failure
-- Metrics logged to console
-
-### 5. Review Outputs
-- Bronze: \`data/bronze/\` (Parquet)
-- Silver: \`data/silver/\` (Parquet)
-- Gold: \`data/gold/\` (Parquet) 
-
-## Event Simulation (Offline)
-
-### Terminal 1: Start file monitor
-python scripts/file_monitor.py
-
-### Terminal 2: Simulate file arrival
- - Put your csv file in data/raw/file_$(date +%s).csv
-
-## Switching Domains
-
-Create new config and initialize agent:
-
-```python
-from agents.code_generator_agent import CodeGeneratorAgent
-
-IOT_CONFIG = {
-    "business_domain": "IoT Sensors",
-    # ... rest of config
+[!code-python]
+USE_CASE_CONFIG = {
+    "cloud_provider": "aws",  # "aws" or "gcp"
+    "source": {
+        "environment": "offline",  # "offline", "aws", "gcp"
+        ...
+    },
+    "gold_output_format": "parquet",  # "parquet" or "bigquery" (GCP only)
+    ...
 }
+[!/code-python]
 
-agent = CodeGeneratorAgent(use_case_overrides=IOT_CONFIG)
-```
+## GCP Prerequisites
 
-## Common Tasks
+### 1. Install Google Cloud SDK
 
-### Reset Pipeline
+[!code-bash]
+# macOS
+brew install --cask google-cloud-sdk
 
-```bash
-rm -rf data/bronze/* data/silver/* data/gold/*
-```
- - Look in notebooks/ too.
+# Linux
+curl -sSL https://sdk.cloud.google.com | bash
 
-### Clear Generated Code
+# Verify
+gcloud --version
+[!/code-bash]
 
-```bash
-rm -rf output/generated_code/*.py
-```
- - Look in notebooks/ too.
+### 2. Authenticate
 
-### View Spark UI
+[!code-bash]
+gcloud auth login
+gcloud config set project your-gcp-project-id
+[!/code-bash]
 
-http://localhost:4040 (when running locally)
+### 3. Enable Required APIs
 
+[!code-bash]
+gcloud services enable dataproc.googleapis.com
+gcloud services enable bigquery.googleapis.com
+gcloud services enable composer.googleapis.com
+gcloud services enable storage.googleapis.com
+[!/code-bash]
 
-### Debug Generated Code
+### 4. Create Service Account
 
-```python:
-print(agent.generate_bronze_code())
-print(agent.generate_silver_code())
-print(agent.generate_gold_code())
-```
+[!code-bash]
+gcloud iam service-accounts create etl-sa \
+    --display-name="ETL Service Account"
 
+gcloud projects add-iam-policy-binding your-project \
+    --member="serviceAccount:etl-sa@your-project.iam.gserviceaccount.com" \
+    --role="roles/dataproc.admin"
 
-## Testing
+gcloud projects add-iam-policy-binding your-project \
+    --member="serviceAccount:etl-sa@your-project.iam.gserviceaccount.com" \
+    --role="roles/bigquery.admin"
 
-### Run unit tests
-```bash
-pytest tests/test_agents.py -v
-```
+gcloud projects add-iam-policy-binding your-project \
+    --member="serviceAccount:etl-sa@your-project.iam.gserviceaccount.com" \
+    --role="roles/storage.admin"
 
-### Run specific test
-```basah
-pytest tests/test_agents.py::TestCodeGeneratorAgent -v
-```
+gcloud iam service-accounts keys create service-account-key.json \
+    --iam-account=etl-sa@your-project.iam.gserviceaccount.com
+[!/code-bash]
 
-# Deployment to AWS Glue
+### 5. Set Environment Variables
 
-## Package and deploy
-```bash
-python scripts/deploy_to_glue.py --bucket my-scripts-bucket --job-name my-pipeline
-```
+Add to `.env`:
 
-## Update existing job
-```bash
-python scripts/deploy_to_glue.py --bucket my-scripts-bucket --job-name my-pipeline --update
-```
+[!code-bash]
+GCP_PROJECT=your-gcp-project-id
+GCP_REGION=us-central1
+GCP_CREDENTIALS_PATH=path/to/service-account-key.json
+[!/code-bash]
 
-## Troubleshooting
+## GCP Deployment Options
 
-### PySpark Not Found
-```bash
-pip install pyspark
-```
+### Option 1: Dataproc (Spark Jobs)
 
-### Groq API Key Not Set
+Deploy and run on Dataproc:
 
-#### Linux/Mac
+[!code-bash]
+python scripts/deploy_to_dataproc.py \
+    --project your-gcp-project \
+    --region us-central1 \
+    --cluster etl-cluster \
+    --bucket your-scripts-bucket \
+    --job-name sales-pipeline
+[!/code-bash]
 
-```bash
-export GROQ_API_KEY="your-key" 
-```
+**What it does:**
+1. Packages agents into ZIP
+2. Uploads to GCS
+3. Submits Dataproc job
 
-#### Windows
-```bash
-set GROQ_API_KEY=your-key
-```
+**Pre-create cluster:**
 
-### Spark Session Errors
+[!code-bash]
+gcloud dataproc clusters create etl-cluster \
+    --region us-central1 \
+    --project your-gcp-project \
+    --config-file=infra/gcp/dataproc_cluster.yaml
+[!/code-bash]
 
-#### Add to code
-```python 
-spark = SparkSession.builder.config("spark.sql.adaptive.enabled", "true").getOrCreate()
-```
+### Option 2: Cloud Composer (Airflow)
 
-### Out of Memory
+Deploy DAG for scheduled orchestration:
 
- - Reduce data size or increase Spark memory:
+[!code-bash]
+python scripts/deploy_to_cloud_composer.py \
+    --project your-gcp-project \
+    --location us-central1 \
+    --environment etl-prod \
+    --dag-name agentic_etl_dag \
+    --schedule "0 2 * * *"
+[!/code-bash]
 
-```python
-spark = SparkSession.builder \
-    .config("spark.executor.memory", "4g") \
-    .config("spark.driver.memory", "4g") \
-    .getOrCreate()
-```
+**What it does:**
+1. Generates Airflow DAG
+2. Uploads to Cloud Composer's GCS bucket
+3. Updates environment variables
 
-## Best Practices
+**Pre-create Composer environment:**
 
-1. **Version Control**: Commit config, not data
-2. **Testing**: Test with small datasets first
-3. **Validation**: Always validate generated code before execution
-4. **Audit**: Review \`output/generated_code/\` for generated logic
-5. **Incremental**: Start with Bronze only, add Silver, then Gold
+[!code-bash]
+gcloud composer environments create etl-prod \
+    --location us-central1 \
+    --project your-gcp-project \
+    --image-version composer-2.5.0-airflow-2.7.0
+[!/code-bash]
 
-## Support
+## GCP Configuration Example
 
-- Check \`output/logs/\` for execution logs
-- Review metadata JSON files for agent decisions
-- Run \`python scripts/validate_config.py\` for config validation
+[!code-python]
+USE_CASE_CONFIG_GCP = {
+    "business_domain": "Sales Analytics",
+    "cloud_provider": "gcp",
+    "bronze_table_name": "sales_raw",
+    "silver_table_name": "sales_clean",
+    "gold_table_name": "sales_aggregated",
+    "gold_output_format": "bigquery",  # Write to BigQuery
+
+    "source": {
+        "type": "event",
+        "environment": "gcp",
+        "gcs_bucket": "my-incoming-data",
+        "gcs_prefix": "uploads/",
+    },
+
+    "gcp": {
+        "compute": {
+            "engine": "dataproc",
+            "region": "us-central1",
+            "cluster_name": "etl-cluster"
+        },
+        "warehouse": {
+            "type": "bigquery",
+            "project": "my-gcp-project",
+            "dataset": "gold_analytics"
+        },
+        "storage": {
+            "bucket": "my-data-lake",
+            "bronze_path": "gs://my-data-lake/bronze/",
+            "silver_path": "gs://my-data-lake/silver/",
+            "gold_path": "gs://my-data-lake/gold/"
+        }
+    }
+}
+[!/code-python]
+
+## Verifying Results on GCP
+
+### BigQuery
+
+[!code-sql]
+SELECT * FROM `my-gcp-project.gold_analytics.revenue_by_product` LIMIT 10;
+SELECT * FROM `my-gcp-project.gold_analytics.daily_trend` ORDER BY date DESC;
+[!/code-sql]
+
+### GCS (Parquet)
+
+[!code-python]
+from pyspark.sql import SparkSession
+spark = SparkSession.builder.getOrCreate()
+df = spark.read.parquet("gs://my-data-lake/gold/revenue_by_product/")
+df.show()
+[!/code-python]
+
+## Cost Optimization
+
+### Dataproc
+- Use preemptible workers for batch jobs
+- Enable autoscaling
+- Set idle delete TTL (30 minutes)
+
+### BigQuery
+- Partition by date
+- Cluster on high-cardinality columns
+- Use slot reservations for predictable costs
+
+### Cloud Composer
+- Use environment size based on workload
+- Schedule DAGs during off-peak hours
+- Monitor resource usage
+
+## Troubleshooting GCP
+
+### Dataproc Job Fails
+
+[!code-bash]
+# Check job logs
+gcloud dataproc jobs describe JOB_ID --region us-central1 --project your-project
+
+# View cluster logs
+gcloud logging read "resource.type=cloud_dataproc_cluster"
+[!/code-bash]
+
+### BigQuery Write Fails
+
+Check service account permissions:
+[!code-bash]
+gcloud projects get-iam-policy your-project \
+    --format=json | grep -A 10 "etl-sa"
+[!/code-bash]
+
+### Cloud Composer DAG Not Appearing
+
+[!code-bash]
+# Check DAG bucket
+gcloud composer environments describe etl-prod \
+    --location us-central1 --format="value(config.dagGcsPrefix)"
+
+# Check DAG file exists
+gsutil ls gs://DAG_BUCKET/dags/
+[!/code-bash]
+
+## Migration from AWS to GCP
+
+1. Update `cloud_provider` to `"gcp"`
+2. Update `source.environment` to `"gcp"`
+3. Update S3 paths to GCS (`s3://` → `gs://`)
+4. Optional: Set `gold_output_format` to `"bigquery"`
+5. Update `.env` with GCP credentials
+6. Deploy using `deploy_to_dataproc.py`
 
 ## Next Steps
 
-1. Customize \`USE_CASE_CONFIG\` for your domain
-2. Add your data to \`data/raw/\`
-3. Run pipeline
-4. Review outputs
-5. Deploy to AWS Glue for production
-
-
+1. Test with sample data locally
+2. Deploy to Dataproc for staging
+3. Validate BigQuery outputs
+4. Schedule with Cloud Composer for production

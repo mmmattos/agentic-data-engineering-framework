@@ -14,6 +14,17 @@ class PipelineConfig:
     groq_model: str = "llama-3.3-70b-versatile"
     groq_temperature: float = 0.1
     
+    # AWS settings
+    aws_access_key: str = os.getenv("AWS_ACCESS_KEY_ID", "")
+    aws_secret_key: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    aws_region: str = os.getenv("AWS_REGION", "us-east-1")
+    
+    # GCP settings
+    gcp_project: str = os.getenv("GCP_PROJECT", "")
+    gcp_region: str = os.getenv("GCP_REGION", "us-central1")
+    gcp_service_account: str = os.getenv("GCP_SERVICE_ACCOUNT", "")
+    gcp_credentials_path: str = os.getenv("GCP_CREDENTIALS_PATH", "")
+    
     # Data paths
     raw_path: str = os.getenv("RAW_PATH", "data/raw/")
     bronze_path: str = os.getenv("BRONZE_PATH", "data/bronze/")

@@ -1,140 +1,88 @@
+---
+README.md
+---
+
 # Agentic Glue ETL Pipeline
 
-Config-driven ETL pipeline using Groq LLM and PySpark for medallion architecture (Bronze → Silver → Gold).
+Config-driven ETL pipeline using Groq LLM and PySpark for medallion architecture (Bronze → Silver → Gold). Supports **local development**, **AWS Glue**, and **Google Cloud Dataproc**.
 
+## Quick Start
 
-## Description
-
-This repository delivers a config-driven ETL pipeline that leverages Groq's LLM to auto-generate PySpark code for medallion architecture (Bronze → Silver → Gold). 
-
-It supports offline development with local Spark and production deployment on AWS Glue with built-in job queuing and S3 event triggers. 
-
-The pipeline handles three input sources (batch files, event-triggered files, and database queries) and outputs to Parquet configurable for both local and AWS environments via a single USE_CASE_CONFIG dictionary. 
-
-Switch domains (IoT, Fintech, Web Logs) or ingestion patterns without changing pipeline logic, making it ideal for LLM-powered data engineering with zero infrastructure lock-in.
-
-
-# Quick Start
-## Setup
-```python
+[!code-bash]
+# Setup
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
 
 # Configure
 cp .env.example .env
-#### Edit .env with your GROQ_API_KEY
+# Edit .env with your GROQ_API_KEY
 
- - Run
-```python
+# Run locally
 python scripts/run_pipeline.py
-```
-# Architecture
-```mermaid
-flowchart TB
-    subgraph INPUT["Input Sources"]
-        A1[("📁 File<br/>CSV/JSON/Parquet")]
-        A2[("⚡ Event<br/>S3 + Glue Trigger")]
-        A3[("🗄️ Database<br/>JDBC (PostgreSQL/MySQL)")]
-    end
+[!/code-bash]
 
-    subgraph AGENTS["Agentic Layer (Groq LLM)"]
-        B1["🤖 Code Generator<br/>• Converts config → PySpark<br/>• Uses llama-3.3-70b<br/>• 280 tokens/sec"]
-        B2["🔍 Validator<br/>• AST syntax check<br/>• Spark best practices<br/>• Auto-fix capabilities"]
-        B3["⚙️ Executor<br/>• Orchestrates layers<br/>• Metrics collection<br/>• Retry logic"]
-    end
+## Architecture
 
-    subgraph LAYERS["Medallion Architecture"]
-        direction LR
-        C1["🥉 Bronze Layer<br/>Raw ingestion<br/>+ metadata columns<br/>Write: append/overwrite"]
-        C2["🥈 Silver Layer<br/>Cleaning & validation<br/>• Null handling<br/>• Deduplication<br/>• Type casting"]
-        C3["🥇 Gold Layer<br/>Aggregations<br/>• Business metrics<br/>• Window functions<br/>• Sorting"]
-    end
+[!code]
+Config (USE_CASE_CONFIG) → Code Generator → PySpark Code → Validator → Executor → Bronze/Silver/Gold
+[!/code]
 
-    subgraph OUTPUT["Output Targets"]
-        D1[("📊 Parquet<br/>Columnar storage<br/>5-10x compression")]
-        D2[("☁️ AWS Glue<br/>Production deployment<br/>Job queuing enabled")]
-    end
+## Supported Cloud Providers
 
-    subgraph OFFLINE["Offline Development"]
-        E1["🐍 Local Spark<br/>master('local[*]')"]
-        E2["🐳 Docker<br/>Glue container"]
-        E3["👀 Watchdog<br/>File event simulation"]
-    end
+| Provider | Compute | Storage | Warehouse | Orchestration |
+|----------|---------|---------|-----------|---------------|
+| **Local** | PySpark (local) | Local filesystem | Parquet | Manual |
+| **AWS** | Glue | S3 | Parquet | Glue Triggers |
+| **GCP** | Dataproc | GCS | BigQuery/Parquet | Cloud Composer |
 
-    A1 --> B1
-    A2 --> B1
-    A3 --> B1
-    B1 --> B2
-    B2 --> B3
-    B3 --> C1
-    C1 --> C2
-    C2 --> C3
-    C3 --> D1
-    D1 --> D2
-    
-    B3 -.-> E1
-    B3 -.-> E2
-    B3 -.-> E3
+## Directory Structure
 
-    style AGENTS fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    style LAYERS fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    style C1 fill:#fff3e0,stroke:#e65100
-    style C2 fill:#e0f2f1,stroke:#004d40
-    style C3 fill:#fff8e1,stroke:#f57f17
-    style OUTPUT fill:#c8e6c9,stroke:#2e7d32
-```
-
-Config (USE_CASE_CONFIG)\
-then\
- → Code Generator → PySpark Code → Validator → Executor → Bronze/Silver/Gold
-
-# Directory Structure
-```bash
+[!code]
 ├── agents/               # CodeGenerator, Validator, Executor
 ├── config/               # Settings and configuration
 ├── data/                 # Data lake (raw/bronze/silver/gold)
 ├── notebooks/            # Jupyter notebooks for development
-├── scripts/              # run_pipeline.py, file_monitor.py
+├── scripts/              # run_pipeline.py, deploy_to_*.py
+├── infra/                # Infrastructure as Code (AWS/GCP)
 ├── output/               # Generated code and logs
 └── tests/                # Unit tests
-```
+[!/code]
 
 ## Configuration
 
-Modify \`USE_CASE_CONFIG\` in \`agents/code_generator_agent.py\`:
+Modify `USE_CASE_CONFIG` in `agents/code_generator_agent.py`:
 
-```json
+[!code-python]
 USE_CASE_CONFIG = {
     "business_domain": "Your Domain",
-    "source": {"type": "file", "environment": "offline"},
+    "cloud_provider": "aws",          # "aws" or "gcp"
+    "source": {
+        "environment": "offline",     # "offline", "aws", "gcp"
+        "type": "file"
+    },
     "cleaning_rules": {...},
     "aggregations": {...},
 }
-``` 
-# Usage
+[!/code-python]
 
-## Run complete pipeline
-```bash
+## Usage
+
+[!code-bash]
+# Local development
 python scripts/run_pipeline.py
-```
-# Run specific layer
-```bash
-python scripts/run_pipeline.py --bronze
-```
 
-# With input file (event source)
-```bash
-python scripts/run_pipeline.py --input data/raw/file.csv
-```
+# Deploy to AWS Glue
+python scripts/deploy_to_glue.py --bucket my-bucket --job-name my-job
 
-# File monitoring (event simulation)
-```bash
-python scripts/file_monitor.py
-```
- - Then copy the files one at a time and they will get processed sequentially (as in a queue)
-# Layers
+# Deploy to GCP Dataproc
+python scripts/deploy_to_dataproc.py --project my-project --bucket my-bucket --cluster etl-cluster
+
+# Deploy to GCP Cloud Composer
+python scripts/deploy_to_cloud_composer.py --project my-project --environment etl-prod --dag-name my_dag
+[!/code-bash]
+
+## Layers
 
 - **Bronze**: Raw ingestion with metadata columns
 - **Silver**: Data cleaning, validation, deduplication
@@ -142,14 +90,26 @@ python scripts/file_monitor.py
 
 ## Output Formats
 
-- **Parquet** (default) - Local development
+- **Parquet** (default) - Local, AWS S3, or GCS
+- **BigQuery** (GCP only) - Google Cloud Warehouse
 
-## Switching Domains
+## Switching Domains or Clouds
 
-Create new config (examples) for IoT, Fintech, Web Logs, Heathcare, etc.:
-```python
-agent = CodeGeneratorAgent(use_case_overrides=USE_CASE_CONFIG_IOT)
-```
+Create new config for IoT, Fintech, or different cloud:
+
+[!code-python]
+# For IoT on GCP
+agent = CodeGeneratorAgent(use_case_overrides=USE_CASE_CONFIG_IOT_GCP)
+
+# For Fintech on AWS
+agent = CodeGeneratorAgent(use_case_overrides=USE_CASE_CONFIG_FINTECH_AWS)
+[!/code-python]
+
+## Documentation
+
+- `USE_CASE_CONFIG_README.md` - Configuration reference
+- `POSTGRES_SETUP.md` - PostgreSQL setup guide (optional)
+- `GENERAL_INSTRUCTIONS.md` - Complete usage instructions
 
 ## License
 

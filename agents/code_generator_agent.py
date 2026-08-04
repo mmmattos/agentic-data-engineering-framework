@@ -1,4 +1,4 @@
-"""Production Code Generator Agent - Config-driven for multi-domain support."""
+"""Production Code Generator Agent - Config-driven for multi-domain and multi-cloud support."""
 
 import os
 import re
@@ -57,7 +57,8 @@ class GenerationResult:
 
 class CodeGeneratorAgent:
     """
-    Config-driven agent. Modify USE_CASE_CONFIG below for any business domain.
+    Config-driven agent. Modify USE_CASE_CONFIG below for any business domain or cloud provider.
+    Supports: AWS (Glue) and GCP (Dataproc/BigQuery).
     """
     
     # ============================================================
@@ -67,16 +68,19 @@ class CodeGeneratorAgent:
         # === BASIC INFORMATION ===
         "business_domain": "Sales Analytics",
         
+        # === CLOUD PROVIDER ===
+        "cloud_provider": "aws",  # "aws" or "gcp"
+        
         # === TABLE NAMES ===
         "bronze_table_name": "sales_raw",
         "silver_table_name": "sales_clean",
         "gold_table_name": "sales_aggregated",
-        "gold_output_format": "parquet",  # Parquet only output
+        "gold_output_format": "parquet",  # "parquet" (AWS/GCP) or "bigquery" (GCP only)
         
         # === SOURCE CONFIGURATION ===
         "source": {
             "type": "file",              # "file", "event", "database"
-            "environment": "offline",    # "offline" or "aws"
+            "environment": "offline",    # "offline", "aws", "gcp"
             
             # For file type
             "format": "csv",
@@ -92,6 +96,12 @@ class CodeGeneratorAgent:
             "s3_prefix": "incoming/",
             "s3_suffix": ".csv",
             "event_type": "s3:ObjectCreated:*",
+            
+            # For event type (GCS trigger) - used when type="event" and environment="gcp"
+            "gcs_bucket": "my-data-bucket",
+            "gcs_prefix": "incoming/",
+            "gcs_suffix": ".csv",
+            "pubsub_topic": "data-ingestion",
             
             # For database type - used when type="database"
             "database": {
@@ -121,6 +131,57 @@ class CodeGeneratorAgent:
             "max_retries": 0,
             "s3_trigger_enabled": False,
             "connections": []
+        },
+        
+        # === GCP CONFIGURATION ===
+        "gcp": {
+            # Compute
+            "compute": {
+                "engine": "dataproc",           # "dataproc" or "dataflow"
+                "region": "us-central1",
+                "cluster_name": "etl-cluster",
+                "max_idle_time": "15m",
+                "master_machine_type": "n1-standard-4",
+                "worker_machine_type": "n1-standard-4",
+                "num_workers": 2,
+                "autoscaling": True,
+                "image_version": "2.1"
+            },
+            
+            # Warehouse
+            "warehouse": {
+                "type": "parquet",              # "bigquery" or "parquet"
+                "project": "my-gcp-project",
+                "dataset": "gold_analytics",
+                "location": "US",
+                "partitioning": {
+                    "enabled": True,
+                    "field": "date",
+                    "type": "DAY"
+                },
+                "clustering": ["product_id", "region"],
+                "write_disposition": "WRITE_TRUNCATE"
+            },
+            
+            # Storage
+            "storage": {
+                "bucket": "my-data-lake",
+                "bronze_path": "gs://my-data-lake/bronze/",
+                "silver_path": "gs://my-data-lake/silver/",
+                "gold_path": "gs://my-data-lake/gold/"
+            },
+            
+            # Orchestration
+            "orchestration": {
+                "type": "cloud_composer",
+                "location": "us-central1",
+                "environment": "etl-prod",
+                "dag_name": "agentic_etl_dag",
+                "schedule_interval": "0 2 * * *",
+                "retries": 3,
+                "retry_delay": "5m",
+                "email_on_failure": True
+            }
         },
         
         # === SCHEMA INFORMATION ===
@@ -198,8 +259,7 @@ class CodeGeneratorAgent:
             - Remove duplicate transactions
             - Valid email format for customer_email
         """,
-    }   
-
+    }
     
     # ============================================================
     # SECTION 2: INITIALIZATION
@@ -220,7 +280,9 @@ class CodeGeneratorAgent:
         
         self._validate_config()
         
+        cloud = self.config.get("cloud_provider", "aws")
         print(f"✅ CodeGeneratorAgent initialized (Config-driven)")
+        print(f"   Cloud Provider: {cloud}")
         print(f"   Business Domain: {self.config['business_domain']}")
         print(f"   Bronze Table: {self.config['bronze_table_name']}")
         print(f"   Silver Table: {self.config['silver_table_name']}")
@@ -229,12 +291,17 @@ class CodeGeneratorAgent:
     def _validate_config(self):
         required_fields = [
             "business_domain", "bronze_table_name", "silver_table_name",
-            "gold_table_name", "gold_output_format",
-            "source", "glue", "available_columns", "cleaning_rules", "aggregations"
+            "gold_table_name", "gold_output_format", "cloud_provider",
+            "source", "glue", "gcp", "available_columns", "cleaning_rules", "aggregations"
         ]
         missing = [f for f in required_fields if f not in self.config]
         if missing:
             raise ValueError(f"Missing required config fields: {missing}")
+        
+        # Validate cloud provider
+        cloud = self.config.get("cloud_provider", "aws")
+        if cloud not in ["aws", "gcp"]:
+            raise ValueError(f"Invalid cloud_provider: {cloud}. Must be 'aws' or 'gcp'")
         
         # Validate source configuration
         source = self.config.get("source", {})
@@ -243,8 +310,8 @@ class CodeGeneratorAgent:
             raise ValueError(f"Invalid source.type: {source_type}. Must be 'file', 'event', or 'database'")
         
         source_env = source.get("environment")
-        if source_env not in ["offline", "aws"]:
-            raise ValueError(f"Invalid source.environment: {source_env}. Must be 'offline' or 'aws'")
+        if source_env not in ["offline", "aws", "gcp"]:
+            raise ValueError(f"Invalid source.environment: {source_env}. Must be 'offline', 'aws', or 'gcp'")
         
         # For file source, validate format and path
         if source_type == "file":
@@ -254,11 +321,17 @@ class CodeGeneratorAgent:
                 raise ValueError("File source missing 'path'")
         
         # Validate event source has required fields
-        if source_type == "event" and source_env == "aws":
-            required_event_fields = ["s3_bucket", "s3_prefix"]
-            missing_event = [f for f in required_event_fields if f not in source]
-            if missing_event:
-                raise ValueError(f"Event source missing required fields: {missing_event}")
+        if source_type == "event":
+            if source_env == "aws":
+                required_event_fields = ["s3_bucket", "s3_prefix"]
+                missing_event = [f for f in required_event_fields if f not in source]
+                if missing_event:
+                    raise ValueError(f"Event source (AWS) missing required fields: {missing_event}")
+            elif source_env == "gcp":
+                required_event_fields = ["gcs_bucket", "gcs_prefix"]
+                missing_event = [f for f in required_event_fields if f not in source]
+                if missing_event:
+                    raise ValueError(f"Event source (GCP) missing required fields: {missing_event}")
         
         # Validate database source has required fields
         if source_type == "database":
@@ -270,12 +343,69 @@ class CodeGeneratorAgent:
             if missing_db:
                 raise ValueError(f"Database source missing required fields: {missing_db}")
         
+        # Validate GCP config if cloud_provider is gcp
+        if cloud == "gcp":
+            gcp_config = self.config.get("gcp", {})
+            required_gcp_fields = ["compute", "warehouse", "storage"]
+            missing_gcp = [f for f in required_gcp_fields if f not in gcp_config]
+            if missing_gcp:
+                raise ValueError(f"GCP config missing required fields: {missing_gcp}")
+        
         print(f"✅ Configuration validated")
+        print(f"   Cloud Provider: {cloud}")
         print(f"   Source Type: {source_type}")
-        print(f"   Environment: {source_env}")   
+        print(f"   Environment: {source_env}")
     
     # ============================================================
-    # SECTION 3: BRONZE LAYER
+    # SECTION 3: HELPER METHODS
+    # ============================================================
+    
+    def _get_storage_path(self, path_type: str, layer: str = None) -> str:
+        """
+        Get storage path based on cloud provider and environment.
+        
+        Args:
+            path_type: "raw", "bronze", "silver", "gold"
+            layer: Optional layer name for building paths
+        """
+        cloud = self.config.get("cloud_provider", "aws")
+        source_config = self.config.get("source", {})
+        env = source_config.get("environment", "offline")
+        
+        # Offline always uses local paths
+        if env == "offline":
+            return f"data/{path_type}/"
+        
+        # AWS paths
+        if cloud == "aws":
+            if path_type == "raw":
+                return source_config.get("path", "data/raw/")
+            elif path_type == "bronze":
+                return f"s3://{source_config.get('s3_bucket', 'my-bucket')}/bronze/"
+            else:
+                return f"s3://{source_config.get('s3_bucket', 'my-bucket')}/{path_type}/"
+        
+        # GCP paths
+        if cloud == "gcp":
+            gcp_storage = self.config.get("gcp", {}).get("storage", {})
+            bucket = gcp_storage.get("bucket", "my-data-lake")
+            
+            if path_type == "raw":
+                return source_config.get("path", "data/raw/")
+            elif path_type == "bronze":
+                return gcp_storage.get("bronze_path", f"gs://{bucket}/bronze/")
+            elif path_type == "silver":
+                return gcp_storage.get("silver_path", f"gs://{bucket}/silver/")
+            elif path_type == "gold":
+                return gcp_storage.get("gold_path", f"gs://{bucket}/gold/")
+            else:
+                return f"gs://{bucket}/{path_type}/"
+        
+        # Fallback
+        return f"data/{path_type}/"
+    
+    # ============================================================
+    # SECTION 4: BRONZE LAYER
     # ============================================================
     
     def generate_bronze_code(self, 
@@ -289,58 +419,43 @@ class CodeGeneratorAgent:
         source_config = self.config.get("source", {})
         source_type = source_config.get("type", "file")
         environment = source_config.get("environment", "offline")
+        cloud = self.config.get("cloud_provider", "aws")
         
         # Determine write mode based on source type
         write_mode = "append" if source_type == "event" else "overwrite"
         
-        # For file source
+        # Determine read path
         if source_type == "file":
             path = source_path or source_config.get("path", "data/raw/")
-            fmt = source_format or source_config.get("format", "csv")
-            options = source_config.get("options", {"header": "true", "inferSchema": "true"})
-            
-            # Build options string
-            opts_lines = []
-            option_items = list(options.items())
-            for i, (k, v) in enumerate(option_items):
-                if i == len(option_items) - 1:
-                    opts_lines.append(f'    .option("{k}", "{v}")')
-                else:
-                    opts_lines.append(f'    .option("{k}", "{v}")\\')
-            opts_str = "\n".join(opts_lines)
-            
-            code = f"""from pyspark.sql import SparkSession
-from pyspark.sql.functions import current_timestamp, lit
-
-spark = SparkSession.builder \\
-    .appName("Bronze_{table}") \\
-    .config("spark.sql.adaptive.enabled", "true") \\
-    .getOrCreate()
-
-# Read from {fmt.upper()} files
-df = spark.read \\
-{opts_str} \\
-    .{fmt}("{path}")
-
-# Add metadata columns
-df = df \\
-    .withColumn("ingestion_timestamp", current_timestamp()) \\
-    .withColumn("source_file", lit("{path}"))
-
-# Write to Bronze
-output_path = "data/bronze/{table}/"
-df.write \\
-    .mode("{write_mode}") \\
-    .option("compression", "snappy") \\
-    .parquet(output_path)
-
-print(f"Bronze complete: {{df.count()}} records")
-print(f"Write mode: {write_mode}")
-"""
-            return code
+        elif source_type == "event":
+            if environment == "aws":
+                path = f"s3://{source_config.get('s3_bucket')}/{source_config.get('s3_prefix', '')}"
+            elif environment == "gcp":
+                path = f"gs://{source_config.get('gcs_bucket')}/{source_config.get('gcs_prefix', '')}"
+            else:
+                path = "data/raw/"
+        else:
+            path = "data/raw/"
         
-        # For database source
-        elif source_type == "database":
+        fmt = source_format or source_config.get("format", "csv")
+        options = source_config.get("options", {"header": "true", "inferSchema": "true"})
+        
+        # Build options string
+        opts_lines = []
+        option_items = list(options.items())
+        for i, (k, v) in enumerate(option_items):
+            if i == len(option_items) - 1:
+                opts_lines.append(f'    .option("{k}", "{v}")')
+            else:
+                opts_lines.append(f'    .option("{k}", "{v}")\\')
+        opts_str = "\n".join(opts_lines)
+        
+        # Determine if we need input_file_name() for source tracking
+        use_input_file = source_type == "event" and environment in ["aws", "gcp"]
+        
+        # Bronze code template
+        if source_type == "database":
+            # Database source code
             db_config = source_config.get("database", {})
             conn = db_config.get("connection", {})
             query = db_config.get("query", "SELECT * FROM source_table")
@@ -390,24 +505,9 @@ df.write \\
 print(f"Bronze complete: {{df.count()}} records")
 print(f"Write mode: {write_mode}")
 """
-            return code
-        
-        # For event source
-        elif source_type == "event":
-            s3_bucket = source_config.get("s3_bucket", "my-bucket")
-            s3_prefix = source_config.get("s3_prefix", "incoming/")
-            fmt = source_format or source_config.get("format", "csv")
-            options = source_config.get("options", {"header": "true", "inferSchema": "true"})
-            
-            opts_lines = []
-            for k, v in options.items():
-                opts_lines.append(f'    .option("{k}", "{v}")')
-            opts_str = "\n".join(opts_lines)
-            
-            if environment == "aws":
-                s3_path = f"s3://{s3_bucket}/{s3_prefix}"
-            else:
-                s3_path = f"data/raw/"
+        else:
+            # File or Event source
+            source_file_col = "input_file_name()" if use_input_file else f'lit("{path}")'
             
             code = f"""from pyspark.sql import SparkSession
 from pyspark.sql.functions import current_timestamp, lit, input_file_name
@@ -417,33 +517,32 @@ spark = SparkSession.builder \\
     .config("spark.sql.adaptive.enabled", "true") \\
     .getOrCreate()
 
-# Read from S3 (event-triggered)
+# Read from source
 df = spark.read \\
 {opts_str} \\
-    .{fmt}("{s3_path}")
+    .{fmt}("{path}")
 
 # Add metadata columns
 df = df \\
     .withColumn("ingestion_timestamp", current_timestamp()) \\
-    .withColumn("source_file", input_file_name())
+    .withColumn("source_file", {source_file_col})
 
-# Write to Bronze (APPEND for accumulating multiple files)
+# Write to Bronze
 output_path = "data/bronze/{table}/"
 df.write \\
-    .mode("append") \\
+    .mode("{write_mode}") \\
     .option("compression", "snappy") \\
     .parquet(output_path)
 
-print(f"Bronze complete: {{df.count()}} records processed")
-print(f"Write mode: append (accumulating raw data)")
+print(f"Bronze complete: {{df.count()}} records")
+print(f"Write mode: {write_mode}")
+print(f"Source: {path}")
 """
-            return code
         
-        else:
-            raise ValueError(f"Unsupported source type: {source_type}")
+        return code
     
     # ============================================================
-    # SECTION 4: SILVER LAYER
+    # SECTION 5: SILVER LAYER
     # ============================================================
     
     def generate_silver_code(self, 
@@ -452,7 +551,25 @@ print(f"Write mode: append (accumulating raw data)")
         """Generate Silver code from config cleaning_rules."""
         
         table = table_name or self.config["silver_table_name"]
-        bronze_path = bronze_table_path or f"data/bronze/{self.config['bronze_table_name']}/"
+        
+        # Determine Bronze path based on cloud provider
+        if bronze_table_path is None:
+            cloud = self.config.get("cloud_provider", "aws")
+            source_config = self.config.get("source", {})
+            env = source_config.get("environment", "offline")
+            
+            if env == "offline":
+                bronze_table_path = f"data/bronze/{self.config['bronze_table_name']}/"
+            elif cloud == "aws":
+                bucket = source_config.get('s3_bucket', 'my-bucket')
+                bronze_table_path = f"s3://{bucket}/bronze/{self.config['bronze_table_name']}/"
+            elif cloud == "gcp":
+                gcp_storage = self.config.get("gcp", {}).get("storage", {})
+                bucket = gcp_storage.get("bucket", "my-data-lake")
+                bronze_table_path = gcp_storage.get("bronze_path", f"gs://{bucket}/bronze/")
+            else:
+                bronze_table_path = f"data/bronze/{self.config['bronze_table_name']}/"
+        
         rules = self.config["cleaning_rules"]
         
         # Build null dropping
@@ -486,7 +603,7 @@ spark = SparkSession.builder \\
     .getOrCreate()
 
 # Read from Bronze
-df = spark.read.parquet("{bronze_path}"){type_fixes}{null_drop}{validations}{dedup}
+df = spark.read.parquet("{bronze_table_path}"){type_fixes}{null_drop}{validations}{dedup}
 
 # Write to Silver
 output_path = "data/silver/{table}/"
@@ -497,16 +614,33 @@ print(f"Silver complete: {{df.count()}} records")
         return code
     
     # ============================================================
-    # SECTION 5: GOLD LAYER (Parquet Only)
+    # SECTION 6: GOLD LAYER
     # ============================================================
     
     def generate_gold_code(self, 
                           silver_table_path: Optional[str] = None,
                           table_name: Optional[str] = None) -> str:
-        """Generate Gold code - Parquet output only."""
+        """Generate Gold code - supports Parquet or BigQuery output."""
         
         table = table_name or self.config["gold_table_name"]
-        silver_path = silver_table_path or f"data/silver/{self.config['silver_table_name']}/"
+        cloud = self.config.get("cloud_provider", "aws")
+        source_config = self.config.get("source", {})
+        env = source_config.get("environment", "offline")
+        
+        # Determine Silver path based on cloud provider
+        if silver_table_path is None:
+            if env == "offline":
+                silver_table_path = f"data/silver/{self.config['silver_table_name']}/"
+            elif cloud == "aws":
+                bucket = source_config.get('s3_bucket', 'my-bucket')
+                silver_table_path = f"s3://{bucket}/silver/{self.config['silver_table_name']}/"
+            elif cloud == "gcp":
+                gcp_storage = self.config.get("gcp", {}).get("storage", {})
+                bucket = gcp_storage.get("bucket", "my-data-lake")
+                silver_table_path = gcp_storage.get("silver_path", f"gs://{bucket}/silver/")
+            else:
+                silver_table_path = f"data/silver/{self.config['silver_table_name']}/"
+        
         aggs = self.config["aggregations"]
         
         # Build metrics collection
@@ -560,6 +694,75 @@ print(f"Silver complete: {{df.count()}} records")
         outputs_str = "\n".join(outputs_code)
         metrics_dict_str = "{" + ", ".join(metrics_dict_items) + "}" if metrics_dict_items else "{}"
         
+        # Determine output format and path
+        output_format = self.config.get("gold_output_format", "parquet")
+        
+        # GCP + BigQuery support
+        if cloud == "gcp" and output_format == "bigquery":
+            gcp_warehouse = self.config.get("gcp", {}).get("warehouse", {})
+            project = gcp_warehouse.get("project", "my-gcp-project")
+            dataset = gcp_warehouse.get("dataset", "gold_analytics")
+            write_disposition = gcp_warehouse.get("write_disposition", "WRITE_TRUNCATE")
+            
+            write_code = f"""
+# Write to BigQuery
+print("Writing to BigQuery...")
+for name, agg_config in {self.config['aggregations']}.items():
+    if agg_config.get("type") == "group_by":
+        df_name = name
+        if df_name in locals():
+            table_id = f"{{project}}.{{dataset}}.{{name}}"
+            locals()[df_name].write \\
+                .format("bigquery") \\
+                .option("table", table_id) \\
+                .option("writeMethod", "direct") \\
+                .mode("{write_disposition.lower()}") \\
+                .save()
+            print(f"  ✓ Wrote {{name}} to BigQuery: {{table_id}}")
+    elif agg_config.get("type") == "agg":
+        if name in metrics:
+            value = metrics[name]
+            metrics_df = spark.createDataFrame([(value,)], [agg_config['alias']])
+            table_id = f"{{project}}.{{dataset}}.{{name}}"
+            metrics_df.write \\
+                .format("bigquery") \\
+                .option("table", table_id) \\
+                .option("writeMethod", "direct") \\
+                .mode("{write_disposition.lower()}") \\
+                .save()
+            print(f"  ✓ Wrote {{name}} to BigQuery: {{table_id}}")
+"""
+        else:
+            # Parquet output (local or cloud storage)
+            if env == "offline":
+                gold_path = f"data/gold/{table}/"
+            elif cloud == "aws":
+                bucket = source_config.get('s3_bucket', 'my-bucket')
+                gold_path = f"s3://{bucket}/gold/{table}/"
+            elif cloud == "gcp":
+                gcp_storage = self.config.get("gcp", {}).get("storage", {})
+                bucket = gcp_storage.get("bucket", "my-data-lake")
+                gold_path = gcp_storage.get("gold_path", f"gs://{bucket}/gold/")
+            else:
+                gold_path = f"data/gold/{table}/"
+            
+            write_code = f"""
+# Write to Parquet
+print("Writing to Parquet...")
+for name, agg_config in {self.config['aggregations']}.items():
+    if agg_config.get("type") == "group_by":
+        df_name = name
+        if df_name in locals():
+            locals()[df_name].write.mode("overwrite").parquet(f"{gold_path}{{name}}")
+            print(f"  ✓ Wrote {{name}} to {{gold_path}}{{name}}")
+    elif agg_config.get("type") == "agg":
+        if name in metrics:
+            value = metrics[name]
+            metrics_df = spark.createDataFrame([(value,)], [agg_config['alias']])
+            metrics_df.write.mode("overwrite").parquet(f"{gold_path}{{name}}")
+            print(f"  ✓ Wrote {{name}} to {{gold_path}}{{name}}")
+"""
+        
         code = f"""from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, sum, avg, count, to_date
 
@@ -569,7 +772,7 @@ spark = SparkSession.builder \\
     .getOrCreate()
 
 # Read from Silver
-df = spark.read.parquet("{silver_path}")
+df = spark.read.parquet("{silver_table_path}")
 
 # Calculate metrics
 {metrics_str}
@@ -580,28 +783,15 @@ metrics = {metrics_dict_str}
 # Generate output DataFrames
 {outputs_str}
 
-# Write to Parquet
-print("Writing to Parquet...")
-for name, agg_config in {self.config['aggregations']}.items():
-    if agg_config.get("type") == "group_by":
-        df_name = name
-        if df_name in locals():
-            locals()[df_name].write.mode("overwrite").parquet(f"data/gold/{table}/{{name}}")
-            print(f"  ✓ Wrote {{name}} to data/gold/{table}/{{name}}")
-    elif agg_config.get("type") == "agg":
-        if name in metrics:
-            value = metrics[name]
-            metrics_df = spark.createDataFrame([(value,)], [agg_config['alias']])
-            metrics_df.write.mode("overwrite").parquet(f"data/gold/{table}/{{name}}")
-            print(f"  ✓ Wrote {{name}} to data/gold/{table}/{{name}}")
+{write_code}
 
 print(f"Gold complete: {{df.count()}} input records")
-print(f"Output written to: data/gold/{table}/")
+print(f"Output format: {output_format}")
 """
         return code
     
     # ============================================================
-    # SECTION 6: LEGACY METHODS
+    # SECTION 7: LEGACY METHODS
     # ============================================================
     
     def generate_silver_code_with_auto_rules(self, data_description: str, **kwargs) -> GenerationResult:
@@ -634,6 +824,7 @@ print(f"Output written to: data/gold/{table}/")
         
         with open(filepath, 'w') as f:
             f.write(f"# Generated by CodeGeneratorAgent (Config-driven)\n")
+            f.write(f"# Cloud Provider: {self.config.get('cloud_provider', 'aws')}\n")
             f.write(f"# Business Domain: {self.config['business_domain']}\n")
             f.write(f"# Layer: {layer.upper()}\n")
             f.write(f"# Timestamp: {datetime.now().isoformat()}\n")
@@ -641,7 +832,6 @@ print(f"Output written to: data/gold/{table}/")
             f.write(code)
         
         print(f"✅ Code saved to: {filepath}")
-    
     def _save_metadata(self, result: GenerationResult, layer: str):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{layer}_metadata_{timestamp}.json"
@@ -649,6 +839,7 @@ print(f"Output written to: data/gold/{table}/")
         
         metadata = {
             "business_domain": self.config["business_domain"],
+            "cloud_provider": self.config.get("cloud_provider", "aws"),
             "layer": layer,
             "timestamp": timestamp,
             "success": result.success,
@@ -661,11 +852,11 @@ print(f"Output written to: data/gold/{table}/")
         with open(filepath, 'w') as f:
             json.dump(metadata, f, indent=2)
         
-        print(f"📊 Metadata saved to: {filepath}")
+        print(f"📊 Metadata saved to: {filepath}") 
 
 
 # ============================================================
-# SECTION 7: EXAMPLE USAGE
+# SECTION 8: EXAMPLE USAGE
 # ============================================================
 
 if __name__ == "__main__":

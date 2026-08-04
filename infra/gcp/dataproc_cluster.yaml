@@ -1,0 +1,47 @@
+# Dataproc cluster configuration
+# Usage: gcloud dataproc clusters create etl-cluster --region us-central1 --project my-project --config-file=infra/gcp/dataproc_cluster.yaml
+
+placement:
+  managedCluster:
+    clusterName: etl-cluster
+    config:
+      gceClusterConfig:
+        zoneUri: us-central1-a
+        serviceAccountScopes:
+          - https://www.googleapis.com/auth/cloud-platform
+      masterConfig:
+        machineTypeUri: n1-standard-4
+        diskConfig:
+          bootDiskType: pd-standard
+          bootDiskSizeGb: 100
+        numInstances: 1
+      workerConfig:
+        machineTypeUri: n1-standard-4
+        diskConfig:
+          bootDiskType: pd-standard
+          bootDiskSizeGb: 100
+        numInstances: 2
+      secondaryWorkerConfig:
+        machineTypeUri: n1-standard-4
+        diskConfig:
+          bootDiskType: pd-standard
+          bootDiskSizeGb: 100
+        numInstances: 0
+      softwareConfig:
+        imageVersion: 2.1
+        optionalComponents:
+          - JUPYTER
+          - ZEPPELIN
+      initializationActions:
+        - executableFile: gs://dataproc-initialization-actions/connectors/connectors.sh
+        - executableFile: gs://dataproc-initialization-actions/python/pip-install.sh
+        - executableFile: gs://dataproc-initialization-actions/gcs/gcs-connector.sh
+      lifecycleConfig:
+        idleDeleteTtl: 900s
+        autoDeleteTtl: 86400s
+      endpointConfig:
+        enableHttpPortAccess: true
+      autoscalingConfig:
+        policyUri: ""
+      encryptionConfig:
+        gcePdKmsKeyName: ""
